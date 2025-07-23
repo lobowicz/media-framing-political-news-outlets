@@ -1,0 +1,649 @@
+---
+title: "Final Project"
+author: Joseph Lobowicz
+format: 
+  pdf:
+    include-in-header: |
+      \usepackage{float}
+  html:
+    anchor-sections: true
+    code-tools: false
+    code-link: true
+    embed-resources: true
+    link-external-icon: true
+    link-external-newwindow: true
+    number-sections: true
+    smooth-scroll: true
+    toc: true
+editor: visual
+---
+
+```{r}
+#| echo: false
+#| warnings: false
+#| include: false
+
+if (interactive()) {
+  rstudioapi::restartSession(clean = TRUE)
+}
+```
+
+```{r}
+#| echo: false
+#| include: false
+
+library(ggradar)
+library(dplyr)
+library(tidyverse)
+library(ggrepel)
+library(tidytext)
+library(scales)
+library(wordcloud)
+library(stringr)
+library(tidyr)
+library(topicmodels)
+```
+
+```{r}
+#| include: false
+
+set.seed(123)
+
+# import the dataset
+articles <- read_csv("../data/political_bias.csv")
+```
+
+## So What?
+
+Political news outlets don’t just report facts, they frame them. This project explores how word choice, sentiment, and topic emphasis vary across left-leaning, neutral, and right-leaning news outlets. We ask:
+
+*What linguistic and thematic differences emerge among outlets with different political alignments?*
+
+Using a 30% sample from a 17,362‑article corpus labeled left, neutral, or right, we apply a sequence statistical analyses to reveal how each camp talks about politics and, more importantly, what that tells us about media framing.
+
+```{r}
+#| include: false
+
+# 1. we first need to add a new column to nunmber the articles
+# 2. then we will clean the words of invalid chars
+
+# NB: initial 17k rows takes too long to run, so sample 30% of the observations for analysis.
+
+articles_sample <- articles |>
+  group_by(label) |>
+  slice_sample(prop = 0.3) |>
+  ungroup() |>
+  mutate(
+    label = case_when(
+      label == 0 ~ "neutral",
+      label == 1 ~ "left",
+      label == 2 ~ "right"
+    ),
+    label = as_factor(label)
+  ) |>
+  mutate(article_no = row_number()) |>
+  mutate(text = text |>
+    str_to_lower() |>
+    str_replace_all("<.*?>", " ") |>
+    str_replace_all("[^[:alpha:]\\s]", " ") |> # keep only letters and whitespace; get rid of apostrophes so that "boy" and "boy's" are equivalent
+    str_squish()) # remove whitespace
+```
+
+```{r}
+#| include: false
+
+# then we will extract the words and remove any stop words
+tidy_articles <- articles_sample |>
+  unnest_tokens(output = word, input = text) |>
+  filter(nchar(word) > 3) |> # remove all one letter words
+  anti_join(stop_words, join_by(word))
+```
+
+## Exploratory Data Analysis
+
+From our sampled proportion of 5206 articles, 45% are neutral, 23% are left biased, and 32% are right biased.
+
+```{r}
+#| echo: false
+
+# first let's find the distribution of articles by bias
+articles_sample |>
+  group_by(label) |>
+  summarise(count = n())
+```
+
+We can generate word clouds for the left, right, and neutral, respectively, to reveal the dominant terms.
+
+```{r}
+#| echo: false
+#| label: fig-left-wc
+#|# fig-pos: "H"
+#| fig-height: 3.5
+#| fig-width: 3.5
+
+# get word counts for each political label
+word_counts <- tidy_articles |>
+  count(label, word, sort = TRUE)
+
+# let's create a wordcloud for the words in left-biased articles
+left_words <- word_counts |>
+  filter(label == "left")
+
+wordcloud(
+  words = left_words$word,
+  freq = left_words$n,
+  max.words = 50, # set top 100 words
+  min.freq = 3, # only include words that appear at least 3 times
+  scale = c(3, 0.5), # set max and min scale
+  colors = brewer.pal(8, "Dark2")
+)
+```
+
+```{r}
+#| echo: false
+#| label: fig-right-wc
+#|# fig-pos: "H"
+#| fig-height: 3.5
+#| fig-width: 3.5
+
+# let's create a wordcloud for the words in right-biased articles
+right_words <- word_counts |>
+  filter(label == "right")
+
+wordcloud(
+  words = right_words$word,
+  freq = right_words$n,
+  max.words = 50, # set top 100 words
+  min.freq = 3, # only include words that appear at least 3 times
+  scale = c(3, 0.5), # set max and min scale
+  colors = brewer.pal(8, "Dark2")
+)
+```
+
+```{r}
+#| echo: false
+#| label: fig-neutral-wc
+#| # fig-pos: "H"
+#| fig-height: 3.5
+#| fig-width: 3.5
+
+# let's create a wordcloud for the words in unbiased articles
+neutral_words <- word_counts |>
+  filter(label == "neutral")
+
+wordcloud(
+  words = neutral_words$word,
+  freq = neutral_words$n,
+  max.words = 50, # set top 100 words
+  min.freq = 3, # only include words that appear at least 3 times
+  scale = c(3, 0.5), # set max and min scale
+  colors = brewer.pal(8, "Dark2")
+)
+
+# let's create a comparison wordcloud for left and right biased articles
+# Filter for left and right articles and pivot to a wide format,
+# where each row is a word and columns represent frequencies for each label.
+# left_right_word_counts <- word_counts |>
+#  filter(label %in% c("left", "right")) |>
+#  pivot_wider(names_from = label, values_from = n, values_fill = list(n = 0))
+# Convert the wide tibble to a matrix.
+# term_matrix <- left_right_word_counts |>
+#  select(-word) |>
+#  as.matrix()
+# row.names(term_matrix) <- left_right_word_counts$word
+# Create a comparison word cloud for left- and right-biased articles.
+# comparison.cloud(term_matrix,
+#                 max.words = 75,
+#                 title.size = 0.001,
+#                 scale = c(3, 0.5),
+#                 random.order = FALSE,
+#                 colors = c("blue", "red"))
+
+
+
+# now get a word cloud of the 20 most frequent words for each political stance
+# top_left_words <- word_counts |>
+#  filter(label == "left") |>
+#  slice_max(order_by = n, n = 20)
+
+# top_center_words <- word_counts |>
+#  filter(label == "center") |>
+#  slice_max(order_by = n, n = 20)
+
+# top_right_words <- word_counts |>
+#  filter(label == "right") |>
+#  slice_max(order_by = n, n = 20)
+
+
+# find the common words between the left and right biased articles, and determine their proportions among all words
+```
+
+After looking at the word clouds for each label, it is clear they have several common words. Let's compare the relative frequencies of these common words that all stances share, and compute their relative frequencies on the plot of @fig-rel-freq. Those with a significant differences are labeled. 
+
+```{r}
+#| echo: false
+#| warning: false
+#| label: fig-rel-freq
+#| fig-pos: "H"
+
+# extract the relative frequencies of words for right and left
+frequency <- word_counts |>
+  filter(label %in% c("left", "right")) |>
+  group_by(label) |>
+  mutate(proportion = n / sum(n)) |>
+  ungroup() |>
+  select(-n) |>
+  pivot_wider(
+    names_from = label,
+    values_from = proportion,
+    values_fill = list(proportion = 0)
+  ) |>
+  mutate(diff = abs(left - right))
+
+# compare the freqs of words in left and right articles
+frequency |>
+  ggplot(aes(x = left, y = right, color = diff)) +
+  geom_abline(color = "black", alpha = 0.5, linetype = "dashed") +
+  geom_jitter(alpha = 0.3, width = 0.0003, height = 0.0003) +
+  geom_text_repel(
+    aes(label = if_else(diff >= 0.0007, word, NA_character_)),
+    size = 3,
+    max.overlaps = 100
+  ) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_viridis_c() +
+  labs(
+    x = "left",
+    y = "right",
+    color = "abs. diff"
+  )
+```
+
+Using tf-idf, we can identify the top ten words uniquely important to each label, and show the distribution below.
+
+```{r}
+#| echo: false
+#| label: fig-vio-plot
+#| fig-pos: "H"
+#| fig-height: 6
+#| fig-width: 6
+
+# we can see that they share some common words, but these terms could be general for all political articles
+# let's now find the tf-idf values for words to determine the common ones SPECIFIC to each group
+
+# get the labels for the top n highest tf-idf values per label
+labels <- tidy_articles |>
+  count(label, word) |>
+  bind_tf_idf(word, label, n) |>
+  filter(tf_idf > 0) |>
+  group_by(label) |>
+  slice_max(order_by = tf_idf, n = 10)
+
+# create the violin plot
+tidy_articles |>
+  count(label, word) |>
+  bind_tf_idf(word, label, n) |>
+  filter(tf_idf > 0) |>
+  ggplot(aes(x = as_factor(label), y = tf_idf, fill = label)) +
+  geom_violin() +
+  geom_jitter(width = 0.2, alpha = 0.4, size = 1) +
+  geom_label_repel(data = labels, aes(label = word), max.overlaps = 100) +
+  labs(
+    x = "Political Bias", y = "TF-IDF",
+    title = "TF-IDF Violin Distribution by Political Bias"
+  )
+```
+Further, we plot the top 15% of words with the greatest absolute difference. 
+
+```{r}
+#| fig-pos: "H"
+#| echo: false
+#| label: fig-scatter-plot
+#| fig-height: 8
+#| fig-width: 10
+
+# let's plot the top 15% of words with the greatest absolute difference
+tidy_articles |>
+  count(label, word) |>
+  bind_tf_idf(word, label, n) |>
+  filter(label %in% c("left", "right")) |>
+  select(label, word, tf_idf) |>
+  pivot_wider(
+    names_from = label,
+    values_from = tf_idf,
+    values_fill = list(tf_idf = 0)
+  ) |>
+  filter(left > 0, right > 0) |>
+  mutate(abs_diff = abs(left - right)) |>
+  filter(abs_diff > quantile(abs_diff, 0.85)) |>
+  ggplot(aes(x = left, y = right, color = abs_diff)) +
+  geom_point(alpha = 0.7) +
+  geom_text_repel(aes(label = word), size = 3, max.overlaps = 100) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", alpha = 0.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  scale_color_viridis_c() +
+  labs(
+    x = "Left TF-IDF",
+    y = "Right TF-IDF",
+    title = "Comparison of TF-IDF Values for Left and Right Articles",
+    color = "Absolute Difference"
+  )
+```
+
+## Sentiment Around Key Figures
+
+News outlets choose which voices to elevate and how to color them. How does the tone around key political figures differ by media bias? The two main figures for each political party from my time has arguably been Trump and Obama.
+
+For @fig-combined-entity-sentiment, we isolated every sentence across our sampled corpus that mentions the entity “obama,” then tokenized those sentences and joined them to the Bing sentiment lexicon. Then, by converting “positive”/“negative” labels into +1/–1 scores, we computed the average sentiment of all “obama” contexts within left‑, neutral‑, and right‑leaning articles. 
+
+We mirrored our *Obama* workflow for the entity *Trump* and computed the average sentiment score and count of mentions for each political bias category.
+
+```{r}
+#| include: false
+#| label: fig-obama-sent
+#| warning: false
+
+entity <- "obama"
+
+entity_context_sent <- articles_sample |>
+  # split into sentences
+  unnest_tokens(sentence, text, token = "sentences") |>
+  # keep only sentences that mention the entity
+  filter(str_detect(sentence, regex(entity, ignore_case = TRUE))) |>
+  # break those sentences into words
+  unnest_tokens(word, sentence) |>
+  inner_join(get_sentiments("bing"), by = "word") |>
+  mutate(sentiment_score = if_else(sentiment == "positive", 1L, -1L)) |>
+  # compute number of mentions and mean sentiment per bias
+  group_by(label) |>
+  summarise(
+    mentions       = n(),
+    mean_sentiment = mean(sentiment_score),
+    .groups        = "drop"
+  )
+
+# repeat for Trump
+entity <- "trump"
+
+entity_context_sent_trump <- articles_sample |>
+  unnest_tokens(sentence, text, token = "sentences") |>
+  filter(str_detect(sentence, regex(entity, ignore_case = TRUE))) |>
+  unnest_tokens(word, sentence) |>
+  inner_join(get_sentiments("bing"), by = "word") |>
+  mutate(sentiment_score = if_else(sentiment == "positive", 1L, -1L)) |>
+  group_by(label) |>
+  summarise(
+    mentions       = n(),
+    mean_sentiment = mean(sentiment_score),
+    .groups        = "drop"
+  )
+```
+
+```{r}
+#| label: fig-combined-entity-sentiment
+#| fig-pos: "H"
+#| echo: false
+#| fig-height: 5
+#| fig-width: 5
+
+# Combine the two sentiment data frames, adding an 'entity' column
+sentiment_obama <- entity_context_sent %>% mutate(entity = "Obama")
+sentiment_trump <- entity_context_sent_trump %>% mutate(entity = "Trump")
+
+combined_sentiment <- bind_rows(sentiment_obama, sentiment_trump)
+
+# Plot both entities side by side, faceted by entity
+combined_sentiment |>
+  ggplot(aes(x = label, y = mean_sentiment, fill = label)) +
+  geom_col(show.legend = FALSE, alpha = 0.7) +
+  geom_text(aes(label = number(mean_sentiment, accuracy = 0.01)),
+    vjust = -0.5, size = 2
+  ) +
+  facet_wrap(~entity, nrow = 1) +
+  scale_fill_manual(values = c(
+    left    = "blue",
+    neutral = "green",
+    right   = "red"
+  )) +
+  labs(
+    x     = "Political Bias",
+    y     = "Avg. Sentiment Score",
+    title = "Sentiment in Sentences with Obama vs. Trump"
+  ) +
+  theme_minimal()
+```
+
+-   Neutral articles mention “Obama” 104,330 times, with an average sentiment score of +0.0403.
+-   Left‑leaning articles mention “Obama” 18,794 times, with an average sentiment score of +0.0299.
+-   Right‑leaning articles mention “Obama” 22,532 times, with an average sentiment score of +0.0094.
+
+In the case of *Obama*, neutral‐labeled articles mention him with a modestly positive average sentiment score. Left-leaning outlets reference him far less frequently (18,794 mentions) and at a slightly lower positive sentiment (0.0299), while right-leaning outlets mention him 22,532 times and with a very small positive mean sentiment (0.0094), essentially a neutral tone. Thus, although all three camps speak of Obama in broadly positive terms, neutral outlets give him the greatest prominence and a tone that is slightly more favorable than partisan sources. The left’s smaller volume and moderate positivity may reflect a focus on specific policies or achievements, whereas the right’s relatively lower sentiment may suggest a more restrained framing.
+
+-   Neutral articles mention “Trump” 123,710 times, with an average sentiment score of +0.0612.
+-   Left‑leaning articles mention “Trump” 45,566 times, with an average sentiment score of +0.0849.
+-   Right‑leaning articles mention “Trump” 40,668 times, with an average sentiment score of +0.0291.
+
+By contrast, the overall conversation around “Trump” displays both higher mention counts and more pronounced tonal differences. Neutral outlets again lead in sheer volume, mentioning Trump with an average sentiment of 0.0612, higher than their sentiment toward Obama, but overall pose both entities with positive references. Left‑leaning outlets mention Trump substantially more than right‑leaning ones, and one might expect left-leaning outlets to cast Trump in a negative light, yet they do so with a highly positive tone. They outlets mention him with the strongest positive average sentiment (0.0849), suggesting that when they do cover Trump, they often discuss events that register positively under a simple lexicon count. Right-leaning outlets reference Trump with a mean sentiment that is more muted than neutral coverage, but overall still positive.
+
+## Framing Through Co-occurrence: Which Words Surround Our Key Figures?
+
+We have shown how outlets talk about “Obama” and “Trump”; @fig-obama-comm address the natural next question, “With which words do they talk about them?” 
+
+To see not just how outlets talk about “Obama” and “Trump,” but what language they use around those names, we extracted 10-word context windows for each entity, removed stop words, and tallied the most frequent co-occurring terms separately for left, neutral, and right outlets. This analysis extends our exploration of framing by revealing the narrative vocabulary each bias camp deploys whenever these figures appear.
+
+```{r}
+#| echo: false
+#| fig-pos: "H"
+#| fig-height: 5
+#| fig-width: 6
+#| label: fig-obama-comm
+
+# Use the tidytext stop_words dataset
+data("stop_words")
+
+get_cooccur <- function(data, entity, window = 10, top_n = 20) {
+  data |>
+    # Create sliding n‑grams of length 'window'
+    unnest_tokens(ngram, text, token = "ngrams", n = window) |>
+    # Keep only those n‑grams that contain the exact entity
+    filter(str_detect(ngram, regex(str_c("\\b", entity, "\\b"), ignore_case = TRUE))) |>
+    # Split each n‑gram into its component words
+    separate_rows(ngram, sep = " ") |>
+    # Normalize case
+    mutate(ngram = str_to_lower(ngram)) |>
+    # Drop the entity itself
+    filter(ngram != str_to_lower(entity)) |>
+    # Drop single‑letter tokens
+    filter(nchar(ngram) > 1) |>
+    # Remove stop words
+    anti_join(stop_words, by = c("ngram" = "word")) |>
+    # Rename for clarity
+    rename(word = ngram) |>
+    # Count co‑occurrences by label
+    count(label, word, sort = TRUE) |>
+    # Keep only the top_n for each bias
+    group_by(label) |>
+    slice_max(n, n = top_n) |>
+    ungroup()
+}
+
+# Compute for "Obama" and "Trump"
+cooccur_obama <- get_cooccur(articles_sample, "obama")
+cooccur_trump <- get_cooccur(articles_sample, "trump")
+
+# Plot top co‑occurring words around "Obama"
+cooccur_obama |>
+  mutate(word = fct_reorder(word, n)) |>
+  ggplot(aes(x = word, y = n, fill = label)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~label, scales = "free_y") +
+  coord_flip() +
+  scale_fill_manual(values = c(left = "blue", neutral = "green", right = "red")) +
+  labs(
+    x     = "Co occurring Word",
+    y     = "Count",
+    title = "Top Words Co occurring with Obama"
+  ) +
+  theme_minimal()
+```
+For Obama, left-leaning sources likewise emphasize his official role (“president”, “administration,”), but then shift more quickly to policy and values terms such as “policy” and “health”. Right-leaning coverage, while also foregrounding title and biography (“president,” “barack,”), brings in outlet-specific and partisan context labels like “michelle”.
+
+```{r}
+#| echo: false
+#| fig-pos: "H"
+#| fig-height: 5
+#| fig-width: 6
+#| label: fig-trump-comm
+
+# Plot top co‑occurring words around "Trump"
+cooccur_trump |>
+  mutate(word = fct_reorder(word, n)) |>
+  ggplot(aes(x = word, y = n, fill = label)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~label, scales = "free_y") +
+  coord_flip() +
+  scale_fill_manual(values = c(left = "blue", neutral = "green", right = "red")) +
+  labs(
+    x     = "Co occurring Word",
+    y     = "Count",
+    title = "Top Words Co occurring with Trump"
+  ) +
+  theme_minimal()
+```
+From @fig-trump-comm, in the case of “Trump,” left-leaning sources also highlight his title (“president,” “administration,”) but quickly pivot to legal and political scrutiny with words like “impeachment”, “cohen” (who was Trump's lawyer), and “russia”, reflecting coverage of investigatory narratives. Right-leaning outlets, while overwhelmingly focusing on the presidency itself, favor press-release terms like “news”, "tweeted" and network identifiers such as “fox”, underscoring a framing rooted in media statements and official communications.
+
+Each outlet selects surrounding words that reinforce particular storylines: left outlets foreground policy and legal scrutiny; and right outlets emphasize media platforms and direct communications. In this way, co-occurrence analysis demonstrates that word choice around key figures could itself be a form of editorial framing. 
+
+## Topic Modeling by Bias
+
+To move from individual words and sentiments to the broad narrative frames that guide political coverage, we fit a single LDA model (k = 10) on our entire sampled corpus. By examining the top ten terms for each topic, we see the themes that underlie every article, regardless of political alignment.
+
+```{r}
+#| include: false
+
+# 1. Build a document–term matrix of raw counts
+dtm <- tidy_articles |>
+  count(article_no, word) |>
+  cast_dtm(document = article_no, term = word, value = n)
+
+# 2. Fit a single LDA model with k = 10 topics
+lda_model <- LDA(dtm, k = 10, control = list(seed = 123))
+```
+
+```{r}
+#| echo: false
+#| label: fig-terms-topic
+#| fig-pos: "H"
+#| fig-height: 6
+#| fig-width: 8
+
+tidy(lda_model, matrix = "beta") |>
+  group_by(topic) |>
+  slice_max(beta, n = 10) |>
+  ungroup() |>
+  mutate(term = reorder_within(term, beta, topic)) |>
+  ggplot(aes(x = beta, y = term, fill = factor(topic))) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~topic, scales = "free") +
+  scale_y_reordered() +
+  labs(
+    title = "Top Terms per Topic",
+    x     = "β",
+    y     = NULL
+  ) +
+  theme_minimal()
+```
+Based on the highest-probability words from @fig-terms-topic, it would not be far-fetched to label the ten topics as follows:
+
+- Topic 1: Republican Border News
+- Topic 2: War & Goepolitical Conflicts
+- Topic 3: Security & Military Operations
+- Topic 4: Legal & Investigations
+- Topic 5: Policing & Civil Unrest
+- Topic 6: Elections & Party Politics
+- Topic 7: Health & Pandemic
+- Topic 8: Global Trade
+- Topic 9: Covid Economy
+- Topic 10: Congress & Legislation
+
+These themes show the frames through which political outlets present news: from foreign affairs (Topics 2 & 8) and pandemic coverage (Topic 7), to domestic governance (Topic 10) and culture-war flashpoints (Topic 5). By defining a shared topic space, we can then compare how much each outlet emphasizes each narrative. This could help address our core question of how theme varies across political alignments.
+
+When we compare the average topic proportions by label, distinct patterns emerge because each side selects different narrative frames to emphasize.
+
+```{r}
+#| echo: false
+#| label: fig-topic-preval
+#| fig-pos: "H"
+#| fig-height: 8
+#| fig-width: 8
+
+# 3. Extract the document–topic probabilities (γ)
+doc_topics <- tidy(lda_model, matrix = "gamma") |>
+  rename(article_no = document) |>
+  mutate(article_no = as.integer(article_no))
+
+# 4. Join back to labels and compute average topic prevalence by bias
+topic_prevalence <- doc_topics |>
+  left_join(
+    articles_sample |> select(article_no, label),
+    by = "article_no"
+  ) |>
+  group_by(label, topic) |>
+  summarise(mean_gamma = mean(gamma), .groups = "drop")
+
+# 5. Plot topic prevalence for each label
+topic_prevalence |>
+  ggplot(aes(x = label, y = mean_gamma, fill = label)) +
+  geom_col(alpha = 0.7) +
+  scale_fill_manual(values = c(left = "blue", neutral = "green", right = "red")) +
+  facet_wrap(~topic, scales = "free_y", ncol = 3) +
+  labs(x = "Political Bias", y = "Avg. Topic Proportion", title = "Topic Prevalence by Bias") +
+  theme_minimal()
+```
+From @fig-topic-preval, we can draw out some interesting relations:
+
+- Left-leaning outlets had the greatest proportion of articles on *Republican Border News* (Topic 1) and *Health & Pandemic* (Topic 7). 
+- Right-leaning outlets had the greatest proprtion of articles on *Legal & Investigations* (Topic 4) and *Covid Economy* (Topic 9). They also wrote more on *Security & Military Operations* than left outlets.
+- Neutral outlets led in the other topic categories.
+
+```{r}
+#| label: fig-topic-prevalence-facet
+#| fig-pos: "H"
+#| echo: false
+#| fig-height: 4
+#| fig-width: 6
+
+topic_prevalence |>
+  # Ensure topic is a character for reordering
+  mutate(topic = as.character(topic)) |>
+  # Plot with topics reordered within each label by descending mean_gamma
+  ggplot(aes(
+    x = reorder_within(topic, mean_gamma, label),
+    y = mean_gamma,
+    fill = label
+  )) +
+  geom_col(show.legend = FALSE, alpha = 0.7) +
+  # Facet by label so each panel shows one bias
+  facet_wrap(~label, scales = "free_x") +
+  # Restore the reordered axis labels
+  scale_x_reordered() +
+  scale_fill_manual(values = c(
+    left    = "blue",
+    neutral = "green",
+    right   = "red"
+  )) +
+  labs(
+    x     = "Topic",
+    y     = "Average Topic Proportion",
+    title = "Topic Prevalence by Political Bias"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+From @fig-topic-prevalence-facet, left outlets focus more on highlighting *Republican Border News* (Topic 1), right outlets on *Congress & Legislation* (Topic 10), and neutrals on *Elections & Party Politics* (Topic 6). Taken together, these topic differences underscore our core question: political news outlets don’t just report facts; they frame them by choosing which narratives to foreground.
+
+
